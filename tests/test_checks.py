@@ -6,6 +6,7 @@ from zotidy.checks import (
     malformed_dois,
     missing_identifier,
     preprint_pairs,
+    redundant_urls,
     short_dois,
 )
 from zotidy.db import Attachment, Item
@@ -93,3 +94,12 @@ def test_preprint_pair_same_author_and_title():
         i.creators = ["Yue"]
     found = preprint_pairs([a, b, c])
     assert len(found) == 1 and {i.item_id for i in found[0].items} == {1, 2}
+
+
+def test_redundant_url_needs_doi_and_publisher_page():
+    pub = item(1, DOI="10.1016/x", url="https://www.sciencedirect.com/science/article/pii/1")
+    doi_in_url = item(2, DOI="10.1234/abc", url="https://example.org/10.1234/ABC")
+    arxiv = item(3, DOI="10.1016/y", url="https://arxiv.org/abs/1.2")
+    no_doi = item(4, url="https://www.sciencedirect.com/science/article/pii/2")
+    found = redundant_urls([pub, doi_in_url, arxiv, no_doi])
+    assert [i.item_id for f in found for i in f.items] == [1, 2]

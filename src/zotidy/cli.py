@@ -141,7 +141,7 @@ def api_prefix(conn, library_id: int) -> str:
     return f"{API}/users/{uid}"
 
 
-def api_request(method: str, url: str, key: str, body: dict | None = None, version: int | None = None):
+def api_request(method: str, url: str, key: str, body: dict | list | None = None, version: int | None = None):
     headers = {"Zotero-API-Key": key, "Zotero-API-Version": "3"}
     if version is not None:
         headers["If-Unmodified-Since-Version"] = str(version)
@@ -177,8 +177,8 @@ def cmd_apply_dois(args: argparse.Namespace) -> int:
     return 0
 
 
-def confirm(n: int, prefix: str) -> bool:
-    print(f"\nWARNING: this writes the DOI field of {n} items in {prefix} through the Zotero Web API.")
+def confirm(n: int, prefix: str, what: str = "the DOI field") -> bool:
+    print(f"\nWARNING: this writes {what} of {n} items in {prefix} through the Zotero Web API.")
     print("The change is applied on the server and synced to every member of the library.")
     answer = input("Type 'continue' to proceed or anything else to cancel: ")
     return answer.strip().lower() == "continue"
@@ -197,17 +197,86 @@ def _patch_doi(prefix: str, key: str, item_key: str, doi: str) -> int:
         return 0
 
 
+def cmd_clear_urls(args: argparse.Namespace) -> int:
+    """Blank URL and Accessed on items where the URL is only the DOI's publisher page."""
+    key = os.environ.get("ZOTERO_API_KEY")
+    if not key and not args.dry_run:
+        sys.exit("set ZOTERO_API_KEY (write access to the library) or use --dry-run")
+    conn = db.connect(args.db)
+    items = [i for f in checks.redundant_urls(db.load_items(conn, args.library)) for i in f.items]
+    prefix = api_prefix(conn, args.library)
+    print(f"{len(items)} items -> {prefix}" + (" (dry run)" if args.dry_run else ""))
+    for i in items:
+        print(f"  {i.key}  {i.fields.get('url', '')[:80]}")
+    if args.dry_run:
+        return 0
+    if not args.yes and not confirm(len(items), prefix, "URL and Accessed"):
+        print("cancelled, nothing written")
+        return 1
+    versions = api_request("GET", f"{prefix}/items?format=versions", key)
+    patches = [{"key": i.key, "version": versions[i.key], "url": "", "accessDate": ""}
+               for i in items if i.key in versions]
+    done = 0
+    for n in range(0, len(patches), 50):
+        result = api_request("POST", f"{prefix}/items", key, patches[n:n + 50])
+        done += len(result.get("successful", {})) + len(result.get("unchanged", {}))
+        for idx, err in result.get("failed", {}).items():
+            print(f"    {patches[n + int(idx)]['key']} failed: {err.get('message')}", file=sys.stderr)
+        print(f"\r{min(n + 50, len(patches))}/{len(patches)}", end="", file=sys.stderr, flush=True)
+    print(file=sys.stderr)
+    print(f"updated {done}/{len(items)}; sync Zotero to see the changes locally")
+    return 0
+
+
+MAIN_HELP = """\
+Diagnostics and fixes for a local Zotero library.
+
+Read-only commands (open zotero.sqlite in immutable mode, never change anything):
+  libraries    list libraries with item counts
+  report       run checks on one library, print or write a report
+  resolve      map shortDOIs to full DOIs via doi.org, write a CSV
+
+Write commands (change the library through the Zotero Web API, ask before writing):
+  apply-dois   write full DOIs from a `resolve` CSV into the DOI field
+  clear-urls   blank URL and Accessed where the URL is only the DOI's publisher page
+
+Write commands need ZOTERO_API_KEY with write access (zotero.org/settings/keys).
+
+Each command has its own options, see `zotidy COMMAND --help`. Examples:
+  zotidy libraries
+  zotidy report --library 20
+  zotidy report --library 20 --check redundant_url --out report.md
+  zotidy clear-urls --library 20 --dry-run
+"""
+
+CHECK_EPILOG = "checks:\n" + "\n".join(
+    f"  {name:16} {text}" for name, text in checks.CHECK_HELP.items()
+) + """
+
+examples:
+  zotidy report --library 20
+  zotidy report --library 20 --check short_doi --check redundant_url
+  zotidy report --library 20 --out report.md
+
+fixes are separate commands, not options of report:
+  zotidy resolve --library 20 && zotidy apply-dois --library 20   # short_doi
+  zotidy clear-urls --library 20                                   # redundant_url
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="zotidy", description=__doc__)
+    p = argparse.ArgumentParser(prog="zotidy", description=MAIN_HELP, usage="zotidy [--db DB] COMMAND [options]",
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--db", type=Path, default=db.DEFAULT_DB, help="path to zotero.sqlite")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", metavar="COMMAND", required=True, help=argparse.SUPPRESS)
 
     sub.add_parser("libraries", help="list libraries with item counts").set_defaults(func=cmd_libraries)
 
-    r = sub.add_parser("report", help="run checks on one library")
+    r = sub.add_parser("report", help="run checks on one library", epilog=CHECK_EPILOG,
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
     r.add_argument("--library", type=int, required=True, help="libraryID from `zotidy libraries`")
-    r.add_argument("--check", action="append", choices=list(checks.ALL_CHECKS),
-                   help="run only this check (repeatable)")
+    r.add_argument("--check", action="append", choices=list(checks.ALL_CHECKS), metavar="NAME",
+                   help="run only this check (repeatable, see list below); default: all")
     r.add_argument("--json", action="store_true", help="machine readable output")
     r.add_argument("--limit", type=int, default=20, help="findings shown per check")
     r.add_argument("--out", type=Path, help="write the full report to this file (.md or .json)")
@@ -224,6 +293,12 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
     a.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     a.set_defaults(func=cmd_apply_dois)
+
+    c = sub.add_parser("clear-urls", help="blank URL and Accessed where the URL is the DOI's publisher page")
+    c.add_argument("--library", type=int, required=True, help="libraryID from `zotidy libraries`")
+    c.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    c.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    c.set_defaults(func=cmd_clear_urls)
 
     args = p.parse_args(argv)
     return args.func(args)

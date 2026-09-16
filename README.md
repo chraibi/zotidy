@@ -10,6 +10,10 @@ seconds instead of minutes.
 
 ## Use
 
+The command comes first, then its options, as in `git commit -m`:
+`zotidy COMMAND --library N [...]`. `zotidy --help` lists the commands,
+`zotidy COMMAND --help` the options, and `zotidy report --help` also the checks.
+
 ```
 uv run zotidy libraries
 uv run zotidy report --library 20
@@ -24,13 +28,16 @@ All of these are read-only. `resolve` only queries doi.org and writes a CSV.
 ### Write commands
 
 > [!CAUTION]
-> `apply-dois` **modifies your library**. It writes through the Zotero Web API,
-> so the change lands on the server and syncs to every member of a group.
-> Zotero has no undo for this. Run with `--dry-run` first and check the CSV.
+> Every command in this section **modifies your library**. They write through
+> the Zotero Web API, so the change lands on the server and syncs to every
+> member of a group. Zotero has no undo for this. Each command asks for
+> confirmation before writing; run it with `--dry-run` first and review the list.
 
 ```
 uv run zotidy apply-dois --library 20 --csv short_dois.csv --dry-run   # show only
 ZOTERO_API_KEY=... uv run zotidy apply-dois --library 20 --csv short_dois.csv
+uv run zotidy clear-urls --library 20 --dry-run
+ZOTERO_API_KEY=... uv run zotidy clear-urls --library 20
 ```
 
 `apply-dois` replaces the shortDOI in each item's DOI field with the full DOI
@@ -38,6 +45,10 @@ from the `resolve` CSV. Before writing it prints a warning and waits for you to
 type `continue`; `--yes` skips the prompt for scripted use. It needs an API key
 with write access from <https://www.zotero.org/settings/keys>, and
 `ZOTERO_USER_ID` when targeting the user library. Sync Zotero afterwards.
+
+`clear-urls` blanks the URL and Accessed fields of every `redundant_url` item, in
+batches of 50, after the same confirmation prompt. The DOI stays and resolves to
+the same page, so nothing is lost for citations.
 
 ## Checks
 
@@ -53,11 +64,12 @@ with write access from <https://www.zotero.org/settings/keys>, and
 | stub | item missing two of creators, year, and a title of three or more words |
 | short_doi | shortDOI alias like `10/f5gckw`; valid, but Zotero and Crossref only match the full DOI |
 | malformed_doi | DOI neither `10.NNNN/suffix` nor a shortDOI, e.g. a URL or a typo |
+| redundant_url | item has a DOI and a URL that is only the publisher landing page for it; BibTeX needs just the DOI |
 | preprint_pair | preprint (arXiv DOI or preprint type) next to a published version with the same first author and title |
 
 ## Fixing
 
-`apply-dois` (see Write commands above) is the only fix so far. Deleting
+`apply-dois` and `clear-urls` (see Write commands above) are the only fixes so far. Deleting
 attachments or merging items still goes through the Zotero UI. The JSON report
 carries item and attachment keys so more fix steps can be added later.
 
