@@ -1,4 +1,13 @@
-from zotidy.checks import duplicate_pdfs, duplicates_by_doi, duplicates_by_title, missing_identifier
+from zotidy.checks import (
+    duplicate_pdfs,
+    duplicates_by_doi,
+    duplicates_by_title,
+    empty_stubs,
+    malformed_dois,
+    missing_identifier,
+    preprint_pairs,
+    short_dois,
+)
 from zotidy.db import Attachment, Item
 
 
@@ -37,7 +46,50 @@ def test_title_duplicates_skip_groups_already_found_by_doi():
     assert len(found) == 1 and {i.item_id for i in found[0].items} == {3, 4}
 
 
+def test_title_duplicates_require_same_first_creator():
+    a = item(1, title="Traffic engineering handbook")
+    b = item(2, title="Traffic engineering handbook.")
+    a.creators, b.creators = ["Evans"], ["Baerwald"]
+    assert duplicates_by_title([a, b]) == []
+
+
+def test_title_duplicates_require_same_year_unless_missing():
+    a = item(1, title="Emergency movement chapter", date="1995")
+    b = item(2, title="Emergency movement chapter", date="2002")
+    c = item(3, title="Emergency movement chapter")
+    assert duplicates_by_title([a, b]) == []
+    found = duplicates_by_title([a, c])
+    assert len(found) == 1 and {i.item_id for i in found[0].items} == {1, 3}
+
+
 def test_missing_identifier_by_type():
     found = missing_identifier([item(1), item(2, typ="book"), item(3, DOI="10.1/x")])
     assert {f.check: [i.item_id for i in f.items] for f in found} == {
         "missing_doi": [1], "missing_isbn": [2]}
+
+
+def test_stub_needs_two_gaps():
+    ok = item(1, date="2020")
+    ok.creators = ["A"]
+    short = item(2, title="Notes", date="2020")
+    short.creators = ["A"]
+    bare = item(3)
+    assert [i.item_id for f in empty_stubs([ok, short, bare]) for i in f.items] == [3]
+
+
+def test_short_and_malformed_doi_are_distinct():
+    good = item(1, DOI="https://doi.org/10.1007/s10035-013-0443-7")
+    short = item(2, DOI="10/f5gckw")
+    broken = item(3, DOI="10.1007 s10035")
+    assert [i.item_id for f in short_dois([good, short, broken]) for i in f.items] == [2]
+    assert [i.item_id for f in malformed_dois([good, short, broken]) for i in f.items] == [3]
+
+
+def test_preprint_pair_same_author_and_title():
+    a = item(1, DOI="10.48550/arxiv.2207.10435", typ="preprint")
+    b = item(2, DOI="10.1007/978-3-031-19830-4_22")
+    c = item(3, DOI="10.48550/arxiv.1.2", title="Some other long enough title")
+    for i in (a, b, c):
+        i.creators = ["Yue"]
+    found = preprint_pairs([a, b, c])
+    assert len(found) == 1 and {i.item_id for i in found[0].items} == {1, 2}

@@ -16,7 +16,28 @@ uv run zotidy report --library 20
 uv run zotidy report --library 20 --check duplicate_pdf --check duplicate_doi
 uv run zotidy report --library 20 --out report.md     # full report, Markdown
 uv run zotidy report --library 20 --out report.json   # full report, JSON
+uv run zotidy resolve --library 20 --out short_dois.csv  # shortDOI -> full DOI map
 ```
+
+All of these are read-only. `resolve` only queries doi.org and writes a CSV.
+
+### Write commands
+
+> [!CAUTION]
+> `apply-dois` **modifies your library**. It writes through the Zotero Web API,
+> so the change lands on the server and syncs to every member of a group.
+> Zotero has no undo for this. Run with `--dry-run` first and check the CSV.
+
+```
+uv run zotidy apply-dois --library 20 --csv short_dois.csv --dry-run   # show only
+ZOTERO_API_KEY=... uv run zotidy apply-dois --library 20 --csv short_dois.csv
+```
+
+`apply-dois` replaces the shortDOI in each item's DOI field with the full DOI
+from the `resolve` CSV. Before writing it prints a warning and waits for you to
+type `continue`; `--yes` skips the prompt for scripted use. It needs an API key
+with write access from <https://www.zotero.org/settings/keys>, and
+`ZOTERO_USER_ID` when targeting the user library. Sync Zotero afterwards.
 
 ## Checks
 
@@ -29,12 +50,16 @@ uv run zotidy report --library 20 --out report.json   # full report, JSON
 | missing_pdf | article or book without a PDF |
 | missing_id | article without DOI, book without ISBN |
 | suspicious | metadata produced by Zotero's PDF recognizer (`libraryCatalog = Zotero`) |
+| stub | item missing two of creators, year, and a title of three or more words |
+| short_doi | shortDOI alias like `10/f5gckw`; valid, but Zotero and Crossref only match the full DOI |
+| malformed_doi | DOI neither `10.NNNN/suffix` nor a shortDOI, e.g. a URL or a typo |
+| preprint_pair | preprint (arXiv DOI or preprint type) next to a published version with the same first author and title |
 
 ## Fixing
 
-Fixes are deliberately not part of this tool yet. Deleting attachments or merging
-items must go through the Zotero Web API or the Zotero UI. The JSON report carries
-item and attachment keys so a fix step can be added later.
+`apply-dois` (see Write commands above) is the only fix so far. Deleting
+attachments or merging items still goes through the Zotero UI. The JSON report
+carries item and attachment keys so more fix steps can be added later.
 
 Metadata normalisation (author names, journal names, DOIs, APA style) is a
 different job and is already solved by the

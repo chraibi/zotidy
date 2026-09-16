@@ -8,8 +8,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import os
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from . import checks, db
@@ -90,6 +95,108 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_short_doi(short: str) -> str:
+    """Return the full DOI behind a shortDOI via the doi.org handle API, or "" if unknown."""
+    url = f"https://doi.org/api/handles/{urllib.parse.quote(short)}"
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        data = json.load(resp)
+    for v in data.get("values", []):
+        if v.get("type") == "HS_ALIAS":
+            return v["data"]["value"].lower()
+    return ""
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    """Map every shortDOI in a library to its full DOI; writes CSV, never touches the database."""
+    items = db.load_items(db.connect(args.db), args.library)
+    short = [i for f in checks.short_dois(items) for i in f.items]
+    rows = []
+    for n, i in enumerate(short, 1):
+        try:
+            full = resolve_short_doi(i.doi)
+        except (urllib.error.URLError, OSError) as e:
+            full = ""
+            print(f"{i.key}: {e}", file=sys.stderr)
+        rows.append((i.key, i.doi, full, i.label()))
+        print(f"\r{n}/{len(short)}", end="", file=sys.stderr, flush=True)
+    print(file=sys.stderr)
+    with args.out.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["key", "short_doi", "doi", "item"])
+        w.writerows(rows)
+    print(f"wrote {args.out} ({sum(1 for r in rows if r[2])}/{len(rows)} resolved)")
+    return 0
+
+
+API = "https://api.zotero.org"
+
+
+def api_prefix(conn, library_id: int) -> str:
+    gid = db.group_id(conn, library_id)
+    if gid is not None:
+        return f"{API}/groups/{gid}"
+    uid = os.environ.get("ZOTERO_USER_ID")
+    if not uid:
+        sys.exit("set ZOTERO_USER_ID for the user library (see zotero.org/settings/keys)")
+    return f"{API}/users/{uid}"
+
+
+def api_request(method: str, url: str, key: str, body: dict | None = None, version: int | None = None):
+    headers = {"Zotero-API-Key": key, "Zotero-API-Version": "3"}
+    if version is not None:
+        headers["If-Unmodified-Since-Version"] = str(version)
+    data = json.dumps(body).encode() if body is not None else None
+    if data:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read()
+        return json.loads(raw) if raw else None
+
+
+def cmd_apply_dois(args: argparse.Namespace) -> int:
+    """Write the full DOI from a `resolve` CSV into each item via the Zotero Web API."""
+    key = os.environ.get("ZOTERO_API_KEY")
+    if not key and not args.dry_run:
+        sys.exit("set ZOTERO_API_KEY (write access to the library) or use --dry-run")
+    with args.csv.open(newline="") as fh:
+        rows = [r for r in csv.DictReader(fh) if r["doi"]]
+    prefix = api_prefix(db.connect(args.db), args.library)
+    print(f"{len(rows)} items -> {prefix}" + (" (dry run)" if args.dry_run else ""))
+    if not args.dry_run and not args.yes and not confirm(len(rows), prefix):
+        print("cancelled, nothing written")
+        return 1
+    done = 0
+    for r in rows:
+        print(f"  {r['key']}  {r['short_doi']} -> {r['doi']}")
+        if args.dry_run:
+            continue
+        done += _patch_doi(prefix, key, r["key"], r["doi"])
+    if not args.dry_run:
+        print(f"updated {done}/{len(rows)}; sync Zotero to see the changes locally")
+    return 0
+
+
+def confirm(n: int, prefix: str) -> bool:
+    print(f"\nWARNING: this writes the DOI field of {n} items in {prefix} through the Zotero Web API.")
+    print("The change is applied on the server and synced to every member of the library.")
+    answer = input("Type 'continue' to proceed or anything else to cancel: ")
+    return answer.strip().lower() == "continue"
+
+
+def _patch_doi(prefix: str, key: str, item_key: str, doi: str) -> int:
+    url = f"{prefix}/items/{item_key}"
+    try:
+        current = api_request("GET", url, key)
+        if current["data"].get("DOI") == doi:
+            return 1
+        api_request("PATCH", url, key, {"DOI": doi}, version=current["version"])
+        return 1
+    except urllib.error.HTTPError as e:
+        print(f"    failed: HTTP {e.code} {e.read().decode(errors='replace')[:120]}", file=sys.stderr)
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="zotidy", description=__doc__)
     p.add_argument("--db", type=Path, default=db.DEFAULT_DB, help="path to zotero.sqlite")
@@ -105,6 +212,18 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--limit", type=int, default=20, help="findings shown per check")
     r.add_argument("--out", type=Path, help="write the full report to this file (.md or .json)")
     r.set_defaults(func=cmd_report)
+
+    v = sub.add_parser("resolve", help="map shortDOIs to full DOIs via doi.org, write CSV")
+    v.add_argument("--library", type=int, required=True, help="libraryID from `zotidy libraries`")
+    v.add_argument("--out", type=Path, default=Path("short_dois.csv"), help="CSV to write")
+    v.set_defaults(func=cmd_resolve)
+
+    a = sub.add_parser("apply-dois", help="write full DOIs from a resolve CSV via the Zotero Web API")
+    a.add_argument("--library", type=int, required=True, help="libraryID from `zotidy libraries`")
+    a.add_argument("--csv", type=Path, default=Path("short_dois.csv"), help="CSV from `zotidy resolve`")
+    a.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    a.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    a.set_defaults(func=cmd_apply_dois)
 
     args = p.parse_args(argv)
     return args.func(args)

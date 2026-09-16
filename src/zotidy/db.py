@@ -79,6 +79,12 @@ def connect(path: Path = DEFAULT_DB) -> sqlite3.Connection:
     return sqlite3.connect(uri, uri=True)
 
 
+def group_id(conn: sqlite3.Connection, library_id: int) -> int | None:
+    """Zotero group ID for a group library, None for the user library."""
+    row = conn.execute("SELECT groupID FROM groups WHERE libraryID = ?", (library_id,)).fetchone()
+    return row[0] if row else None
+
+
 def libraries(conn: sqlite3.Connection) -> list[tuple[int, str, str]]:
     """Return (libraryID, type, name) for user and group libraries."""
     rows = conn.execute(
