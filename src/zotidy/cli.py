@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import checks, db
+from . import checks, db, identify
 
 
 def cmd_libraries(args: argparse.Namespace) -> int:
@@ -35,7 +35,7 @@ def findings_json(findings: list[checks.Finding]) -> list[dict]:
             "reason": f.reason,
             "items": [
                 {"key": i.key, "type": i.item_type, "title": i.title,
-                 "pdfs": [a.key for a in i.pdfs]}
+                 "pdfs": [a.key for a in i.pdfs], "hint": f.hints.get(i.key, "")}
                 for i in f.items
             ],
         }
@@ -57,6 +57,8 @@ def findings_markdown(library: int, n_items: int, findings: list[checks.Finding]
             lines.append(f"- **{f.reason}**")
             for it in f.items:
                 lines.append(f"  - `{it.key}` {it.label()}")
+                if it.key in f.hints:
+                    lines.append(f"    - {f.hints[it.key]}")
     return "\n".join(lines) + "\n"
 
 
@@ -72,14 +74,29 @@ def print_findings(library: int, n_items: int, findings: list[checks.Finding], l
             print(f"  [{f.reason}]")
             for it in f.items:
                 print(f"     {it.key}  {it.label()}")
+                if it.key in f.hints:
+                    print(f"        -> {f.hints[it.key]}")
         if len(group) > limit:
             print(f"  ... {len(group) - limit} more (raise --limit or use --out)")
+
+
+def add_hints(findings: list[checks.Finding], db_path: Path) -> None:
+    """Look up every suspicious item's PDF online and attach the result as a hint."""
+    for f in findings:
+        if f.check != "suspicious":
+            continue
+        for n, it in enumerate(f.items, 1):
+            print(f"\ridentifying {n}/{len(f.items)}", end="", file=sys.stderr, flush=True)
+            f.hints[it.key] = identify.identify(it, db_path)
+        print(file=sys.stderr)
 
 
 def cmd_report(args: argparse.Namespace) -> int:
     conn = db.connect(args.db)
     items = db.load_items(conn, args.library)
     findings = checks.run(items, args.check or None)
+    if args.identify:
+        add_hints(findings, args.db)
 
     if args.out:
         if args.out.suffix == ".json":
@@ -257,6 +274,7 @@ examples:
   zotidy report --library 20
   zotidy report --library 20 --check short_doi --check redundant_url
   zotidy report --library 20 --out report.md
+  zotidy report --library 20 --check suspicious --identify
 
 fixes are separate commands, not options of report:
   zotidy resolve --library 20 && zotidy apply-dois --library 20   # short_doi
@@ -278,6 +296,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--check", action="append", choices=list(checks.ALL_CHECKS), metavar="NAME",
                    help="run only this check (repeatable, see list below); default: all")
     r.add_argument("--json", action="store_true", help="machine readable output")
+    r.add_argument("--identify", action="store_true",
+                   help="for suspicious items, read the PDF and look it up on Crossref (needs pdftotext)")
     r.add_argument("--limit", type=int, default=20, help="findings shown per check")
     r.add_argument("--out", type=Path, help="write the full report to this file (.md or .json)")
     r.set_defaults(func=cmd_report)

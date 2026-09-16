@@ -103,3 +103,17 @@ def test_redundant_url_needs_doi_and_publisher_page():
     no_doi = item(4, url="https://www.sciencedirect.com/science/article/pii/2")
     found = redundant_urls([pub, doi_in_url, arxiv, no_doi])
     assert [i.item_id for f in found for i in f.items] == [1, 2]
+
+
+def test_find_ids_in_pdf_text():
+    from zotidy.identify import find_ids
+    text = "Phys. Rev. E 99, 012345 (2019). DOI: 10.1103/PhysRevE.99.012345. arXiv:1811.01234v2 [physics]"
+    assert find_ids(text) == ("10.1103/PhysRevE.99.012345", "1811.01234v2")
+    assert find_ids("no identifiers here") == ("", "")
+
+
+def test_title_similarity():
+    from zotidy.identify import title_similarity
+    assert title_similarity("Force-based models of pedestrian dynamics",
+                            "Force-Based Models of Pedestrian Dynamics.") == 1.0
+    assert title_similarity("Physically Based Modeling", "Who's Who") == 0.0

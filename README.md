@@ -20,6 +20,7 @@ uv run zotidy report --library 20
 uv run zotidy report --library 20 --check duplicate_pdf --check duplicate_doi
 uv run zotidy report --library 20 --out report.md     # full report, Markdown
 uv run zotidy report --library 20 --out report.json   # full report, JSON
+uv run zotidy report --library 20 --check suspicious --identify   # look up PDFs online
 uv run zotidy resolve --library 20 --out short_dois.csv  # shortDOI -> full DOI map
 ```
 
@@ -60,7 +61,7 @@ the same page, so nothing is lost for citations.
 | duplicate_title | same item type and normalised title, not already caught above |
 | missing_pdf | article or book without a PDF |
 | missing_id | article without DOI, book without ISBN |
-| suspicious | metadata produced by Zotero's PDF recognizer (`libraryCatalog = Zotero`) |
+| suspicious | metadata produced by Zotero's PDF recognizer (`libraryCatalog = Zotero`); with `--identify` the PDF's first pages are read and the item is looked up on Crossref (needs `pdftotext`) |
 | stub | item missing two of creators, year, and a title of three or more words |
 | short_doi | shortDOI alias like `10/f5gckw`; valid, but Zotero and Crossref only match the full DOI |
 | malformed_doi | DOI neither `10.NNNN/suffix` nor a shortDOI, e.g. a URL or a typo |

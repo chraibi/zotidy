@@ -7,7 +7,7 @@ show them together and a later fix step can act on the group.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from .db import Item, group_by
@@ -37,6 +37,7 @@ class Finding:
     check: str
     reason: str
     items: list[Item]
+    hints: dict[str, str] = field(default_factory=dict)  # item key -> extra info
 
 
 def _title_key(item: Item) -> str:
@@ -190,7 +191,7 @@ CHECK_HELP = {
     "duplicate_title": "same type, first creator, year and title (not caught above)",
     "missing_pdf": "article or book without a PDF",
     "missing_id": "article without DOI, book without ISBN",
-    "suspicious": "metadata from Zotero's PDF recognizer (libraryCatalog = Zotero)",
+    "suspicious": "metadata from Zotero's PDF recognizer; --identify looks up the PDF",
     "stub": "missing two of: creators, year, a title of three or more words",
     "short_doi": "shortDOI alias like 10/f5gckw; see fixes below",
     "malformed_doi": "DOI neither 10.NNNN/suffix nor a shortDOI",
